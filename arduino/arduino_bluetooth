@@ -1,0 +1,127 @@
+
+#include "Arduino.h"
+#include <SoftwareSerial.h>
+
+
+
+  size_t len = 4;
+  // char message[word_size];
+  const int send_compel = 5000;
+  int loop_time=0;
+  int led         = 13;
+  int bluetoothTx = 2;
+  int bluetoothRx = 3;
+  SoftwareSerial bluetooth(bluetoothTx, bluetoothRx);
+  int baudrate[8] ={4800,9600,14400,19200,28800,38400,57600,115200};
+  int i = 1;
+
+void setup() {
+  Serial.begin(9600);
+  bluetooth.begin(9600);
+  while(!Serial){}
+
+  Serial.write("AT sent");
+  delay(500);
+  bluetooth.write("AT+NAME?");
+  delay(500);
+  while (bluetooth.available()) {
+     Serial.write(bluetooth.read());
+   }
+  delay(100);
+  Serial.println("");
+
+  bluetooth.write("AT+POWE3");
+  delay(500);
+  while(bluetooth.available())
+  {
+    Serial.write(bluetooth.read());
+  }
+  delay(100);
+  Serial.println("");
+
+  delay(500);
+  bluetooth.write("AT+CHAR?");
+  delay(500);
+  while (bluetooth.available()) {
+     Serial.write(bluetooth.read());
+   }
+  delay(100);
+  Serial.println("");
+
+  delay(500);
+  bluetooth.write("AT+NAMEMetashack");
+  delay(500);
+  while (bluetooth.available()) {
+      Serial.write((char)bluetooth.read());
+
+    }
+
+  Serial.println("");
+  bluetooth.write("AT+CHAR0x2A46"); //add charicteristic
+  delay(500);
+  while (bluetooth.available()) {
+      Serial.write(bluetooth.read());
+    }
+
+  Serial.println("");
+  bluetooth.write("AT+RELI0");
+  delay(500);
+  while (bluetooth.available()) {
+      Serial.write(bluetooth.read());
+    }
+  Serial.println("");
+  bluetooth.write("AT+SHOW1");
+  delay(100);
+  while (bluetooth.available()) {
+      Serial.write(bluetooth.read());
+
+    }
+  Serial.println("");
+
+  pinMode(led,OUTPUT);
+  digitalWrite(led,HIGH);
+}
+
+
+
+void loop()
+{
+  // loop_time++;
+
+
+  while(bluetooth.available()&& bluetooth.available() == 4)
+  {
+    delay(200);
+    Serial.flush();
+    int buff_size = bluetooth.available();
+    int mess_size =bluetooth.available()+2;
+    char  chars [buff_size];
+    char message[mess_size];
+    bluetooth.readBytes(chars,buff_size );
+    memcpy(message+1,chars,buff_size);
+    message[0]=';';
+    message[mess_size-1]=';';
+    // test[0]=';';
+    // test[1]=toSend;
+    // test[2]=';';
+    // Serial.print(";8881;");
+    for(int t=0;t<mess_size;t++){
+      Serial.print(message[t]);
+    }
+
+    delay(200);
+    bluetooth.flush();
+  }
+
+
+
+
+// if(loop_time>1000) loop_time=0;
+  //Read from usb serial to bluetooth
+  while(Serial.available())
+  {
+    char toSend = (char)Serial.read();
+    bluetooth.write(toSend);
+    Serial.print(toSend);
+  }
+}
