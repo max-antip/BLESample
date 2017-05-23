@@ -2,7 +2,6 @@ package metashack.com.myblue.services;
 
 
 import android.app.Service;
-import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
@@ -13,30 +12,26 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Binder;
 import android.os.IBinder;
-import android.support.annotation.Nullable;
+import android.support.annotation.NonNull;
 import android.util.Log;
 
+import java.io.Serializable;
 import java.util.List;
-import java.util.UUID;
 
-public class BLEService extends Service {
+public class BLEService extends Service implements Serializable {
     private final static String TAG = BLEService.class.getSimpleName();
+    public static final long SEND_TIME_OUT_MILLIS = 10000;
 
-    private BluetoothAdapter mBluetoothAdapter;
-    private String mBluetoothDeviceAddress;
     private BluetoothGatt gatt;
     private int mConnectionState = STATE_DISCONNECTED;
     private BluetoothDevice device;
-    private Context context;
 
     private BluetoothGattCharacteristic tx;
     private BluetoothGattCharacteristic rx;
 
-    public static final UUID SERIAL_SERVICE_UUID = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb");
-    public static final UUID TX_CHAR_UUID = UUID.fromString("0000fff2-0000-1000-8000-00805f9b34fb");
-    public static final UUID RX_CHAR_UUID = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb");
-
+    private List<BluetoothGattService> bluetoothServices;
 
     private static final int STATE_DISCONNECTED = 0;
     private static final int STATE_CONNECTING = 1;
@@ -54,37 +49,52 @@ public class BLEService extends Service {
             "com.example.bluetooth.le.EXTRA_DATA";
     private boolean writeInProgress;
 
-    public BLEService(BluetoothAdapter mBluetoothAdapter, BluetoothDevice device, Context context) {
-        this.context = context;
+    private IBinder myBinder = new MyBinder();
+
+    public BLEService() {
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        IntentFilter filter = getIntentFilter();
+        getApplicationContext().registerReceiver(broadcastUpdReciever, filter);
+        device = intent.getParcelableExtra("device");
+        if (!connectGatt()) {
+            Log.e(TAG, "Gatt server not connected");
+            stopSelf();
+        }
+        return super.onStartCommand(intent, flags, startId);
+    }
+
+    public BLEService(BluetoothDevice device) {
+        this.device = device;
+    }
+
+    @NonNull
+    public static IntentFilter getIntentFilter() {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_GATT_CONNECTED);
         filter.addAction(ACTION_GATT_SERVICES_DISCOVERED);
         filter.addAction(ACTION_DATA_AVAILABLE);
         filter.addAction(EXTRA_DATA);
-        this.context.registerReceiver(broadcastUpdReciever, filter);
-        this.mBluetoothAdapter = mBluetoothAdapter;
-        this.device = device;
+        return filter;
     }
 
-    public void connectGatt() {
-        gatt = device.connectGatt(context, false, mGattCallback);
-        gatt.connect();
+    public boolean connectGatt() {
+        gatt = device.connectGatt(getApplicationContext(), false, mGattCallback);
+        return gatt.connect();
     }
+
 
     public BluetoothGatt getGatt() {
         return gatt;
     }
-
-
-    //    public final static UUID UUID_HEART_RATE_MEASUREMENT =
-//            UUID.fromString(SampleGattAttributes.HEART_RATE_MEASUREMENT);
 
     // Handles various events fired by the Service.
 // ACTION_GATT_CONNECTED: connected to a GATT server.
 // ACTION_GATT_DISCONNECTED: disconnected from a GATT server.
 // ACTION_GATT_SERVICES_DISCOVERED: discovered GATT services.
 // ACTION_DATA_AVAILABLE: received data from the device. This can be a
-// result of read or notification operations.
 
     private final BluetoothGattCallback mGattCallback =
             new BluetoothGattCallback() {
@@ -95,11 +105,11 @@ public class BLEService extends Service {
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
                         intentAction = ACTION_GATT_CONNECTED;
                         mConnectionState = STATE_CONNECTED;
-                        broadcastUpdate(intentAction);
                         Log.i(TAG, "Connected to GATT server.");
                         Log.i(TAG, "Attempting to start service discovery:" +
-                                BLEService.this.gatt.discoverServices());
+                                gatt.discoverServices());
 
+                        broadcastUpdate(intentAction);
 
                     } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                         intentAction = ACTION_GATT_DISCONNECTED;
@@ -113,6 +123,8 @@ public class BLEService extends Service {
                 // New services discovered
                 public void onServicesDiscovered(BluetoothGatt gatt, int status) {
                     if (status == BluetoothGatt.GATT_SUCCESS) {
+                        bluetoothServices = gatt.getServices();
+                        Log.d(TAG, "Gatt service discovered");
                         broadcastUpdate(ACTION_GATT_SERVICES_DISCOVERED);
                     } else {
                         Log.w(TAG, "onServicesDiscovered received: " + status);
@@ -128,14 +140,21 @@ public class BLEService extends Service {
                         broadcastUpdate(ACTION_DATA_AVAILABLE, characteristic);
                     }
                 }
+
+                @Override
+                public void onCharacteristicWrite(BluetoothGatt gatt,
+                                                  BluetoothGattCharacteristic characteristic,
+                                                  int status) {
+                    super.onCharacteristicWrite(gatt, characteristic, status);
+
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        Log.d(TAG, "Write characteristic " + characteristic.getUuid() + " successfull");
+                    }
+                    writeInProgress = false;
+                }
             };
 
-
-    public BluetoothGattCallback getGattCallback() {
-        return mGattCallback;
-    }
-
-
+    // for test only
     private final BroadcastReceiver broadcastUpdReciever = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -147,31 +166,34 @@ public class BLEService extends Service {
 //                mConnected = false;
                 Log.d(TAG, "Gatt disconnected");
             } else if (ACTION_GATT_SERVICES_DISCOVERED.equals(action)) {
-                Log.d(TAG, "Gatt service discovered");
-                List<BluetoothGattService> services = getGatt().getServices();
-                for (BluetoothGattService s : services) {
+              /*  bluetoothServices = getGatt().getServices();
+                Log.d(TAG, "Gatt service discovered");*/
+               /* for (BluetoothGattService s : services) {
                     List<BluetoothGattCharacteristic> characteristics = s.getCharacteristics();
 
                     for (BluetoothGattCharacteristic cha : characteristics) {
                         if ((cha.getProperties() & (BluetoothGattCharacteristic.PROPERTY_WRITE | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE)) != 0) {
-                            cha.setValue("testicus".getBytes());
-                            gatt.writeCharacteristic(cha);
+                            send(cha, "test");
                         }
                     }
                 }
-
+*/
 //                displayGattServices(bleService.getSupportedGattServices());
             } else if (ACTION_DATA_AVAILABLE.equals(action)) {
                 Log.d(TAG, "Gatt action data available");
 //                displayData(intent.getStringExtra(BLEService.EXTRA_DATA));
             }
         }
+
     };
 
+    public List<BluetoothGattService> getBluetoothServices() {
+        return bluetoothServices;
+    }
 
     private void broadcastUpdate(final String action) {
         final Intent intent = new Intent(action);
-        context.sendBroadcast(intent);
+        getApplicationContext().sendBroadcast(intent);
     }
 
     private void broadcastUpdate(final String action,
@@ -196,28 +218,24 @@ public class BLEService extends Service {
         sendBroadcast(intent);
     }
 
-    public void send(byte[] data) {
+    public void send(BluetoothGattCharacteristic charac, byte[] data) {
         long beginMillis = System.currentTimeMillis();
-        if (tx == null || data == null || data.length == 0) {
-            // Do nothing if there is no connection or message to send.
+        if (charac == null || data == null || data.length == 0) {
             return;
         }
-        // Update TX characteristic value.  Note the setValue overload that takes a byte array must be used.
-        tx.setValue(data);
-        writeInProgress = true; // Set the write in progress flag
-        gatt.writeCharacteristic(tx);
-        /*while (writeInProgress) {
-            if (System.currentTimeMillis() - beginMillis > CommunicationStatus.SEND_TIME_OUT_MILLIS) {
-                notifyOnCommunicationError(CommunicationStatus.COMMUNICATION_TIMEOUT, null);
+        charac.setValue(data);
+        writeInProgress = true;
+        gatt.writeCharacteristic(charac);
+        while (writeInProgress) {
+            if (System.currentTimeMillis() - beginMillis > SEND_TIME_OUT_MILLIS) {
                 break;
             }
-        }*/
-        ; // Wait for the flag to clear in onCharacteristicWrite
+        }
+
     }
 
-    // Send data to connected ble serial port device. We can only send 20 bytes per packet,
-    // so break longer messages up into 20 byte payloads
-    public void send(String string) {
+    public void send(BluetoothGattCharacteristic charac,
+                     String string) {
         int len = string.length();
         int pos = 0;
         StringBuilder stringBuilder = new StringBuilder();
@@ -232,14 +250,24 @@ public class BLEService extends Service {
                 stringBuilder.append(string.toCharArray(), pos, len);
                 len = 0;
             }
-            send(stringBuilder.toString().getBytes());
+            send(charac, stringBuilder.toString().getBytes());
         }
     }
 
 
-    @Nullable
     @Override
     public IBinder onBind(Intent intent) {
-        return null;
+        return myBinder;
     }
+
+
+    public class MyBinder extends Binder {
+
+        public BLEService getService() {
+            return BLEService.this;
+        }
+
+    }
+
+
 }
